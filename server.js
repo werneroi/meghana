@@ -6,9 +6,19 @@ const path = require('path');
 const { Pool } = require('pg');
 const PgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcrypt');
-const nodemailer = require('nodemailer');
+// const nodemailer = require('nodemailer');
 const http = require('http');
 const { Server } = require('socket.io');
+const { Resend } = require('resend');
+
+let emailService = null;
+
+if (process.env.RESEND_API_KEY) {
+  emailService = new Resend(process.env.RESEND_API_KEY);
+  console.log('✅ Resend email service configured');
+} else {
+  console.log('⚠️ Email not configured (RESEND_API_KEY missing)');
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -86,7 +96,7 @@ app.use(
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Nodemailer (Gmail) ---
-let transporter;
+// let transporter;
 // try {
 //   if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
 //     transporter = nodemailer.createTransport({
@@ -111,35 +121,35 @@ let transporter;
 // } catch (err) {
 //   console.error('⚠️ Failed to configure email:', err.message);
 // }
-try {
-  if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
-    transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465, // Use 465 instead of 587
-      secure: true, // true for 465, false for other ports
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS
-      },
-      tls: {
-        rejectUnauthorized: true
-      }
-    });
+// try {
+//   if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
+//     transporter = nodemailer.createTransport({
+//       host: 'smtp.gmail.com',
+//       port: 465, // Use 465 instead of 587
+//       secure: true, // true for 465, false for other ports
+//       auth: {
+//         user: process.env.GMAIL_USER,
+//         pass: process.env.GMAIL_PASS
+//       },
+//       tls: {
+//         rejectUnauthorized: true
+//       }
+//     });
     
-    // Verify connection configuration
-    transporter.verify(function (error, success) {
-      if (error) {
-        console.error('❌ Email configuration error:', error.message);
-      } else {
-        console.log('✅ Email server is ready to send messages');
-      }
-    });
-  } else {
-    console.log('⚠️ Email not configured (GMAIL_USER or GMAIL_PASS missing)');
-  }
-} catch (err) {
-  console.error('⚠️ Failed to configure email:', err.message);
-}
+//     // Verify connection configuration
+//     transporter.verify(function (error, success) {
+//       if (error) {
+//         console.error('❌ Email configuration error:', error.message);
+//       } else {
+//         console.log('✅ Email server is ready to send messages');
+//       }
+//     });
+//   } else {
+//     console.log('⚠️ Email not configured (GMAIL_USER or GMAIL_PASS missing)');
+//   }
+// } catch (err) {
+//   console.error('⚠️ Failed to configure email:', err.message);
+// }
 
 
 async function initDb() {
@@ -245,30 +255,34 @@ app.post('/api/register', async (req, res) => {
     const participant = result.rows[0];
 
     // Send email with code + password
-    if (transporter) {
-    try {
-        const info = await transporter.sendMail({
-        from: `"Research Study" <${process.env.GMAIL_USER}>`,
-        to: email,
-        subject: 'Your study login code and password',
-        text: `Thank you for joining the study.\n\nYour login code: ${code}\nYour password: ${password}\n\nPlease keep this safe.`,
-        html: `
-            <h2>Thank you for joining the study!</h2>
-            <p><strong>Your login code:</strong> ${code}</p>
-            <p><strong>Your password:</strong> ${password}</p>
-            <p>Please keep this information safe.</p>
-        `
-        });
-        console.log('📧 Email sent successfully to', email);
-        console.log('📧 Message ID:', info.messageId);
-    } catch (err) {
-        console.error('❌ Error sending email:', err.message);
-        console.error('❌ Full error:', err);
-        // Don't fail registration if email fails
-    }
-    } else {
-    console.log('⚠️ Email not sent (transporter not configured)');
-    }
+    // Send email with code + password
+if (emailService) {
+  try {
+    await emailService.emails.send({
+      from: 'Research Study <onboarding@resend.dev>', // Free domain from Resend
+      to: email,
+      subject: 'Your study login code and password',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">Thank you for joining the study!</h2>
+          <p style="font-size: 16px;">Your login credentials have been generated:</p>
+          <div style="background-color: #f5f5f5; padding: 20px; border-radius: 5px; margin: 20px 0;">
+            <p style="margin: 10px 0;"><strong>Login Code:</strong> <code style="background-color: #fff; padding: 5px 10px; border-radius: 3px;">${code}</code></p>
+            <p style="margin: 10px 0;"><strong>Password:</strong> <code style="background-color: #fff; padding: 5px 10px; border-radius: 3px;">${password}</code></p>
+          </div>
+          <p style="color: #666; font-size: 14px;">Please keep this information safe and do not share it with anyone.</p>
+        </div>
+      `
+    });
+    console.log('📧 Email sent successfully to', email);
+  } catch (err) {
+    console.error('❌ Error sending email:', err.message);
+    console.error('Full error:', err);
+    // Don't fail registration if email fails
+  }
+} else {
+  console.log('⚠️ Email not sent (email service not configured)');
+}
     res.json({
       ok: true,
       code: participant.code,

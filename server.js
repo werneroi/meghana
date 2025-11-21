@@ -90,16 +90,21 @@ let transporter;
 try {
   if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
     transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 587,
-      secure: false,
+      service: 'gmail', // This automatically sets host and port
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_PASS
-      },
-      connectionTimeout: 15000
+      }
     });
-    console.log('📧 Email transporter configured');
+    
+    // Verify connection configuration
+    transporter.verify(function (error, success) {
+      if (error) {
+        console.error('❌ Email configuration error:', error);
+      } else {
+        console.log('✅ Email server is ready to send messages');
+      }
+    });
   } else {
     console.log('⚠️ Email not configured (GMAIL_USER or GMAIL_PASS missing)');
   }
@@ -229,20 +234,29 @@ app.post('/api/register', async (req, res) => {
 
     // Send email with code + password
     if (transporter) {
-  try {
-    await transporter.sendMail({
-      from: `"Research Study" <${process.env.GMAIL_USER}>`,
-      to: email,
-      subject: 'Your study login code and password',
-      text: `Thank you for joining the study.\n\nYour login code: ${code}\nYour password: ${password}\n\nPlease keep this safe.`,
-    });
-    console.log('📧 Email sent to', email);
-  } catch (err) {
-    console.error('❌ Error sending email:', err.message);
-  }
-} else {
-  console.log('⚠️ Email not sent (transporter not configured)');
-}
+    try {
+        const info = await transporter.sendMail({
+        from: `"Research Study" <${process.env.GMAIL_USER}>`,
+        to: email,
+        subject: 'Your study login code and password',
+        text: `Thank you for joining the study.\n\nYour login code: ${code}\nYour password: ${password}\n\nPlease keep this safe.`,
+        html: `
+            <h2>Thank you for joining the study!</h2>
+            <p><strong>Your login code:</strong> ${code}</p>
+            <p><strong>Your password:</strong> ${password}</p>
+            <p>Please keep this information safe.</p>
+        `
+        });
+        console.log('📧 Email sent successfully to', email);
+        console.log('📧 Message ID:', info.messageId);
+    } catch (err) {
+        console.error('❌ Error sending email:', err.message);
+        console.error('❌ Full error:', err);
+        // Don't fail registration if email fails
+    }
+    } else {
+    console.log('⚠️ Email not sent (transporter not configured)');
+    }
     res.json({
       ok: true,
       code: participant.code,
@@ -389,10 +403,19 @@ process.on('SIGINT', () => {
 
 initDb()
   .then(() => {
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🏥 Health check available at http://0.0.0.0:${PORT}/health`);
-    });
+    const HOST = '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`🚀 Server running on ${HOST}:${PORT}`);
+  console.log(`🏥 Health check available at http://${HOST}:${PORT}/health`);
+  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔌 Ready to accept connections`);
+});
+
+// Add error handler for server
+server.on('error', (error) => {
+  console.error('❌ Server error:', error);
+  process.exit(1);
+});
   })
   .catch((err) => {
     console.error('❌ Failed to init DB:', err);

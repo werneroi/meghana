@@ -251,6 +251,10 @@ app.get('/admin.html', (req, res, next) => {
   next();
 });
 
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 // --- Socket.IO test ---
 io.on('connection', (socket) => {
   console.log('🟢 Socket connected:', socket.id);
@@ -273,6 +277,7 @@ initDb()
   .then(() => {
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🏥 Health check available at http://0.0.0.0:${PORT}/health`);
     });
   })
   .catch((err) => {

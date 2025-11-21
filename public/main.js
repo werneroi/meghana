@@ -51,12 +51,19 @@ generateBtn.addEventListener('click', () => {
 // Register form
 const registerForm = document.getElementById('register-form');
 const registerResult = document.getElementById('register-result');
+const registerSpinner = document.getElementById('register-spinner');
+const registerSubmitBtn = registerForm.querySelector('button[type="submit"]');
 
 registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   const formData = new FormData(registerForm);
   const data = Object.fromEntries(formData.entries());
+
+  registerResult.textContent = '';
+  registerResult.classList.remove('error');
+  registerSpinner.classList.remove('hidden');
+  registerSubmitBtn.disabled = true;
 
   try {
     const res = await fetch('/api/register', {
@@ -82,6 +89,9 @@ registerForm.addEventListener('submit', async (e) => {
     console.error(err);
     registerResult.textContent = 'Network error';
     registerResult.classList.add('error');
+  } finally {
+    registerSpinner.classList.add('hidden');
+    registerSubmitBtn.disabled = false;
   }
 });
 

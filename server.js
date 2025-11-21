@@ -4,6 +4,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 const { Pool } = require('pg');
+const PgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
 const http = require('http');
@@ -35,6 +36,11 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'dev-secret',
+    store: new PgSession({
+      pool,
+      tableName: 'session',
+      createTableIfMissing: true
+    }),
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -48,11 +54,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Nodemailer (Gmail) ---
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_PASS
-  }
+  },
+  connectionTimeout: 15000
 });
 
 // --- DB init ---

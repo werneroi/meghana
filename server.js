@@ -15,10 +15,12 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 // --- Postgres pool ---
-const useRailway = Boolean(process.env.RAILWAY_DATABASE_URL);
-const connectionString = useRailway
-  ? process.env.RAILWAY_DATABASE_URL
-  : process.env.DATABASE_URL;
+// Prefer local DATABASE_URL when available; fall back to Railway in production.
+const connectionString =
+  process.env.DATABASE_URL || process.env.RAILWAY_DATABASE_URL;
+const useRailway = Boolean(
+  connectionString && connectionString === process.env.RAILWAY_DATABASE_URL
+);
 
 if (!connectionString) {
   throw new Error('DATABASE_URL (local) or RAILWAY_DATABASE_URL (Railway) must be set');
@@ -264,11 +266,12 @@ io.on('connection', (socket) => {
 
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 initDb()
   .then(() => {
-    server.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
+    server.listen(PORT, HOST, () => {
+      console.log(`🚀 Server running on ${HOST}:${PORT}`);
     });
   })
   .catch((err) => {

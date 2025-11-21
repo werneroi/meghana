@@ -17,25 +17,53 @@ const io = new Server(server);
 
 // --- Postgres pool ---
 // Prefer local DATABASE_URL when available; fall back to Railway in production.
-const connectionString =
-  process.env.DATABASE_URL || process.env.RAILWAY_DATABASE_URL;
-const useRailway = Boolean(
-  connectionString && connectionString === process.env.RAILWAY_DATABASE_URL
-);
+// const connectionString =
+//   process.env.DATABASE_URL || process.env.RAILWAY_DATABASE_URL;
+// const useRailway = Boolean(
+//   connectionString && connectionString === process.env.RAILWAY_DATABASE_URL
+// );
+
+// if (!connectionString) {
+//   throw new Error('DATABASE_URL (local) or RAILWAY_DATABASE_URL (Railway) must be set');
+// }
+
+// const pool = new Pool({
+//   connectionString,
+//   ssl: useRailway ? { rejectUnauthorized: false } : false
+// });
+
+const connectionString = process.env.DATABASE_URL;
 
 if (!connectionString) {
-  throw new Error('DATABASE_URL (local) or RAILWAY_DATABASE_URL (Railway) must be set');
+  throw new Error('DATABASE_URL must be set');
 }
 
 const pool = new Pool({
   connectionString,
-  ssl: useRailway ? { rejectUnauthorized: false } : false
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 // --- Middlewares ---
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// app.use(
+//   session({
+//     secret: process.env.SESSION_SECRET || 'dev-secret',
+//     store: new PgSession({
+//       pool,
+//       tableName: 'session',
+//       createTableIfMissing: true
+//     }),
+//     resave: false,
+//     saveUninitialized: false,
+//     cookie: {
+//       secure: false // set true + app.set('trust proxy', 1) when behind HTTPS proxy
+//     }
+//   })
+// );
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'dev-secret',
@@ -47,7 +75,9 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: false // set true + app.set('trust proxy', 1) when behind HTTPS proxy
+      secure: process.env.NODE_ENV === 'production', // true in production
+      httpOnly: true,
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
   })
 );

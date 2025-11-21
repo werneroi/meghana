@@ -86,33 +86,83 @@ app.use(
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Nodemailer (Gmail) ---
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_PASS
-  },
-  connectionTimeout: 15000
-});
+let transporter;
+try {
+  if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
+    transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_PASS
+      },
+      connectionTimeout: 15000
+    });
+    console.log('📧 Email transporter configured');
+  } else {
+    console.log('⚠️ Email not configured (GMAIL_USER or GMAIL_PASS missing)');
+  }
+} catch (err) {
+  console.error('⚠️ Failed to configure email:', err.message);
+}
 
 // --- DB init ---
+// async function initDb() {
+//   await pool.query(`
+//     CREATE TABLE IF NOT EXISTS participants (
+//       id SERIAL PRIMARY KEY,
+//       code VARCHAR(20) UNIQUE NOT NULL,
+//       email TEXT NOT NULL,
+//       age INTEGER,
+//       sex VARCHAR(10),
+//       gender VARCHAR(50),
+//       gender_other TEXT,
+//       password_hash TEXT NOT NULL,
+//       created_at TIMESTAMPTZ DEFAULT NOW()
+//     );
+//   `);
+//   console.log('✅ DB ready');
+// }
+
 async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS participants (
-      id SERIAL PRIMARY KEY,
-      code VARCHAR(20) UNIQUE NOT NULL,
-      email TEXT NOT NULL,
-      age INTEGER,
-      sex VARCHAR(10),
-      gender VARCHAR(50),
-      gender_other TEXT,
-      password_hash TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  console.log('✅ DB ready');
+  try {
+    console.log('📊 Starting database initialization...');
+    
+    // Test connection first
+    const testResult = await pool.query('SELECT NOW()');
+    console.log('✅ Database connection successful:', testResult.rows[0].now);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS participants (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(20) UNIQUE NOT NULL,
+        email TEXT NOT NULL,
+        age INTEGER,
+        sex VARCHAR(10),
+        gender VARCHAR(50),
+        gender_other TEXT,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('✅ Participants table ready');
+    
+    // Check if session table exists
+    const sessionCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'session'
+      );
+    `);
+    console.log('✅ Session table check:', sessionCheck.rows[0].exists);
+    
+    console.log('✅ DB initialization complete');
+  } catch (error) {
+    console.error('❌ Database initialization failed:', error.message);
+    console.error('Full error:', error);
+    throw error;
+  }
 }
 
 // --- Helpers ---
@@ -178,19 +228,21 @@ app.post('/api/register', async (req, res) => {
     const participant = result.rows[0];
 
     // Send email with code + password
-    try {
-      await transporter.sendMail({
-        from: `"Research Study" <${process.env.GMAIL_USER}>`,
-        to: email,
-        subject: 'Your study login code and password',
-        text: `Thank you for joining the study.\n\nYour login code: ${code}\nYour password: ${password}\n\nPlease keep this safe.`,
-      });
-      console.log('📧 Email sent to', email);
-    } catch (err) {
-      console.error('❌ Error sending email:', err.message);
-      // We DON'T fail the registration if email sending fails
-    }
-
+    if (transporter) {
+  try {
+    await transporter.sendMail({
+      from: `"Research Study" <${process.env.GMAIL_USER}>`,
+      to: email,
+      subject: 'Your study login code and password',
+      text: `Thank you for joining the study.\n\nYour login code: ${code}\nYour password: ${password}\n\nPlease keep this safe.`,
+    });
+    console.log('📧 Email sent to', email);
+  } catch (err) {
+    console.error('❌ Error sending email:', err.message);
+  }
+} else {
+  console.log('⚠️ Email not sent (transporter not configured)');
+}
     res.json({
       ok: true,
       code: participant.code,
@@ -302,6 +354,38 @@ io.on('connection', (socket) => {
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
 // const HOST = process.env.HOST || '0.0.0.0';
+
+// Handle uncaught errors
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise);
+  console.error('❌ Reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('👋 SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    console.log('💤 HTTP server closed');
+    pool.end(() => {
+      console.log('💤 Database pool closed');
+    });
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('👋 SIGINT signal received: closing HTTP server');
+  server.close(() => {
+    console.log('💤 HTTP server closed');
+    pool.end(() => {
+      console.log('💤 Database pool closed');
+    });
+  });
+});
 
 initDb()
   .then(() => {

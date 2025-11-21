@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Research Study - Login / Register</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <h1>Research Study</h1>
+
+    <div class="tabs">
+        <button id="tab-login" class="tab active">Login</button>
+        <button id="tab-register" class="tab">Register</button>
+    </div>
+
+    <!-- Login -->
+    <div id="login-section">
+        <h2>Login</h2>
+        <p>Admin: use username <strong>admin</strong> and password <strong>123456</strong>.</p>
+        <form id="login-form">
+            <label>
+                Code (or "admin"):
+                <input type="text" name="username" required />
+            </label>
+            <label>
+                Password:
+                <input type="password" name="password" required />
+            </label>
+            <button type="submit">Login</button>
+        </form>
+        <div id="login-message" class="message"></div>
+    </div>
+
+    <!-- Register -->
+    <div id="register-section" class="hidden">
+        <h2>Register as Participant</h2>
+        <form id="register-form">
+            <label>
+                Email:
+                <input type="email" name="email" required />
+            </label>
+
+            <label>
+                Age:
+                <input type="number" name="age" min="0" />
+            </label>
+
+            <label>
+                Sex:
+                <select name="sex">
+                    <option value="">Select...</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                </select>
+            </label>
+
+            <label>
+                Gender:
+                <select name="gender" id="gender-select">
+                    <option value="">Select...</option>
+                    <option value="woman">Woman</option>
+                    <option value="man">Man</option>
+                    <option value="non-binary">Non-binary</option>
+                    <option value="genderqueer">Genderqueer</option>
+                    <option value="trans-man">Trans man</option>
+                    <option value="trans-woman">Trans woman</option>
+                    <option value="agender">Agender</option>
+                    <option value="questioning">Questioning</option>
+                    <option value="prefer-not-to-say">Prefer not to say</option>
+                    <option value="other">Other</option>
+                </select>
+            </label>
+
+            <label id="gender-other-wrapper" class="hidden">
+                Please specify:
+                <input type="text" name="genderOther" />
+            </label>
+
+            <label>
+                Password:
+                <input type="text" name="password" id="password-input" required />
+                <button type="button" id="generate-password">Generate strong password</button>
+            </label>
+
+            <button type="submit">Register</button>
+        </form>
+
+        <div id="register-result" class="message"></div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+
+</html>

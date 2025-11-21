@@ -259,7 +259,7 @@ app.post('/api/register', async (req, res) => {
 if (emailService) {
   try {
     await emailService.emails.send({
-      from: 'Research Study <onboarding@resend.dev>', // Free domain from Resend
+      from: 'Research Study <no-reply@ifshealers.com>', // Free domain from Resend
       to: email,
       subject: 'Your study login code and password',
       html: `

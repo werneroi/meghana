@@ -1,6 +1,6 @@
 body {
   font-family: Arial, sans-serif;
-  max-width: 700px;
+  max-width: 1100px;
   margin: 20px auto;
 }
 
@@ -75,4 +75,138 @@ button {
 
 .message.error {
   color: red;
+}
+
+.forms-grid {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+.question-row {
+  border: 1px solid #ccc;
+  padding: 8px;
+  margin: 8px 0;
+  border-radius: 4px;
+}
+
+.question-row label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.question-row textarea {
+  width: 100%;
+}
+
+.question-row .remove-question {
+  background: #f5f5f5;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.form-card {
+  border: 1px solid #ddd;
+  padding: 12px;
+  margin: 12px 0;
+  border-radius: 6px;
+}
+
+.form-question {
+  margin: 8px 0;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.participant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.participant-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+}
+
+.participant-sidebar {
+  border: 1px solid #ddd;
+  padding: 12px;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.sidebar-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.sidebar-item {
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.sidebar-item:hover {
+  background: #f0f0f0;
+}
+
+.sidebar-item.active {
+  border-color: #0077ff;
+  background: #e8f2ff;
+}
+
+.participant-main {
+  border: 1px solid #ddd;
+  padding: 12px;
+  border-radius: 6px;
+  min-height: 300px;
+}
+
+.db-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+}
+
+.table-view {
+  border: 1px solid #ddd;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  border: 1px solid #ccc;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.data-table th {
+  background: #f5f5f5;
+}
+
+.forms-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
 }

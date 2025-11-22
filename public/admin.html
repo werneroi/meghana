@@ -8,27 +8,74 @@
 </head>
 
 <body>
-    <h1>Admin Dashboard</h1>
-    <button id="logout-btn">Logout</button>
+    <header class="participant-header">
+        <div>
+            <h1>Admin Dashboard</h1>
+        </div>
+        <div class="header-actions">
+            <button id="logout-btn">Logout</button>
+        </div>
+    </header>
 
-    <h2>Participants</h2>
-    <table id="participants-table" border="1">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Code</th>
-                <th>Email</th>
-                <th>Age</th>
-                <th>Sex</th>
-                <th>Gender</th>
-                <th>Gender Other</th>
-                <th>Created At</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+    <div class="participant-layout">
+        <aside class="participant-sidebar">
+            <h2>Sections</h2>
+            <ul id="admin-sidebar" class="sidebar-list">
+                <li class="sidebar-item active" data-view="database">Database</li>
+                <li class="sidebar-item" data-view="forms">Forms</li>
+            </ul>
+        </aside>
 
-    <div id="admin-message" class="message"></div>
+        <main class="participant-main">
+            <div id="database-view" class="admin-view">
+                <h2>Database</h2>
+                <div class="db-grid">
+                    <div>
+                        <h3>Tables</h3>
+                        <ul id="tables-list" class="sidebar-list"></ul>
+                    </div>
+                    <div class="table-view">
+                        <h3 id="table-title">Select a table</h3>
+                        <div id="table-message" class="message"></div>
+                        <div id="table-container"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="forms-view" class="admin-view hidden">
+                <div class="forms-grid">
+                    <div>
+                        <div class="forms-header">
+                            <h2 id="form-builder-title">Form Builder</h2>
+                            <button id="new-form-btn" type="button">New form</button>
+                        </div>
+                        <label>Title
+                            <input type="text" id="form-title" />
+                        </label>
+                        <label>Description
+                            <textarea id="form-description" rows="3"></textarea>
+                        </label>
+                        <label>Release date/time
+                            <input type="datetime-local" id="form-release" />
+                        </label>
+                        <label>
+                            <input type="checkbox" id="form-active" checked />
+                            Active
+                        </label>
+                        <button id="add-question-btn" type="button">Add question</button>
+                        <div id="questions-container"></div>
+                        <button id="save-form-btn" type="button">Save form</button>
+                        <div id="form-builder-message" class="message"></div>
+                    </div>
+
+                    <div>
+                        <h3>Existing forms</h3>
+                        <ul id="forms-list"></ul>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
 
     <script src="admin.js"></script>
 </body>

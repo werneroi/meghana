@@ -174,6 +174,71 @@ async function initDb() {
       );
     `);
     console.log('✅ Participants table ready');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS forms (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        release_at TIMESTAMPTZ DEFAULT NOW(),
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('✅ Forms table ready');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS form_questions (
+        id SERIAL PRIMARY KEY,
+        form_id INTEGER REFERENCES forms(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        type TEXT NOT NULL,
+        required BOOLEAN DEFAULT FALSE,
+        options JSONB DEFAULT '[]'::jsonb,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('✅ Form questions table ready');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS form_responses (
+        id SERIAL PRIMARY KEY,
+        form_id INTEGER REFERENCES forms(id) ON DELETE CASCADE,
+        participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+        participant_code TEXT,
+        submitted_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(form_id, participant_id)
+      );
+    `);
+    console.log('✅ Form responses table ready');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS form_answers (
+        id SERIAL PRIMARY KEY,
+        response_id INTEGER REFERENCES form_responses(id) ON DELETE CASCADE,
+        question_id INTEGER REFERENCES form_questions(id) ON DELETE CASCADE,
+        participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+        participant_code TEXT,
+        answer_text TEXT,
+        answer_json JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    console.log('✅ Form answers table ready');
+
+    // Backfill columns if the tables already existed without the new fields
+    await pool.query(
+      `ALTER TABLE form_responses ADD COLUMN IF NOT EXISTS participant_code TEXT`
+    );
+    await pool.query(
+      `ALTER TABLE form_answers ADD COLUMN IF NOT EXISTS participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE`
+    );
+    await pool.query(
+      `ALTER TABLE form_answers ADD COLUMN IF NOT EXISTS participant_code TEXT`
+    );
     
     // Check if session table exists
     const sessionCheck = await pool.query(`
@@ -213,12 +278,395 @@ function ensureAdmin(req, res, next) {
   next();
 }
 
+const ALLOWED_QUESTION_TYPES = new Set([
+  'short_text',
+  'long_text',
+  'select_one',
+  'select_multiple',
+  'dropdown'
+]);
+
+function normalizeQuestions(questions = []) {
+  if (!Array.isArray(questions)) {
+    throw new Error('Questions must be an array');
+  }
+  return questions.map((q, idx) => {
+    const { label, type, required = false, options = [], sortOrder = idx } = q;
+    if (!label || !type) throw new Error('Each question needs a label and type');
+    if (!ALLOWED_QUESTION_TYPES.has(type)) throw new Error(`Invalid question type: ${type}`);
+    const opts = Array.isArray(options)
+      ? options.filter((o) => o && String(o).trim() !== '').map((o) => String(o))
+      : [];
+    return {
+      label: String(label),
+      type,
+      required: Boolean(required),
+      options: opts,
+      sortOrder: Number.isFinite(sortOrder) ? sortOrder : idx
+    };
+  });
+}
+
+function validateAnswers(formQuestions, answers) {
+  const answerMap = {};
+  formQuestions.forEach((q) => {
+    const raw = answers[q.id];
+    if (q.required && (raw === undefined || raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0))) {
+      throw new Error(`Question "${q.label}" is required`);
+    }
+    if (raw === undefined || raw === null || raw === '') {
+      answerMap[q.id] = { answer_text: null, answer_json: null };
+      return;
+    }
+
+    if (q.type === 'select_multiple') {
+      if (!Array.isArray(raw)) throw new Error(`Question "${q.label}" expects an array`);
+      answerMap[q.id] = { answer_text: null, answer_json: raw };
+    } else if (q.type === 'short_text' || q.type === 'long_text') {
+      answerMap[q.id] = { answer_text: String(raw), answer_json: null };
+    } else {
+      // single choice/dropdown
+      answerMap[q.id] = { answer_text: String(raw), answer_json: null };
+    }
+  });
+  return answerMap;
+}
+
 // --- Routes ---
 
 // Who am I?
 app.get('/api/me', (req, res) => {
   if (!req.session.user) return res.json({ user: null });
   res.json({ user: req.session.user });
+});
+
+// --- Admin: Forms CRUD ---
+app.post('/api/admin/forms', ensureAdmin, async (req, res) => {
+  try {
+    const { title, description, releaseAt, isActive = true, questions = [] } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title is required' });
+
+    const normalizedQuestions = normalizeQuestions(questions);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const formResult = await client.query(
+        `INSERT INTO forms (title, description, release_at, is_active)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [title, description || null, releaseAt ? new Date(releaseAt) : new Date(), Boolean(isActive)]
+      );
+      const form = formResult.rows[0];
+
+      const insertedQuestions = [];
+      for (const q of normalizedQuestions) {
+        const qRes = await client.query(
+          `INSERT INTO form_questions (form_id, label, type, required, options, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING *`,
+          [form.id, q.label, q.type, q.required, JSON.stringify(q.options), q.sortOrder]
+        );
+        insertedQuestions.push(qRes.rows[0]);
+      }
+
+      await client.query('COMMIT');
+      res.json({ form, questions: insertedQuestions });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('❌ Create form error:', err);
+    res.status(500).json({ error: err.message || 'Server error' });
+  }
+});
+
+app.put('/api/admin/forms/:id', ensureAdmin, async (req, res) => {
+  const formId = parseInt(req.params.id, 10);
+  if (isNaN(formId)) return res.status(400).json({ error: 'Invalid form id' });
+
+  try {
+    const { title, description, releaseAt, isActive = true, questions = [] } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title is required' });
+    const normalizedQuestions = normalizeQuestions(questions);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const formResult = await client.query(
+        `UPDATE forms
+         SET title = $1, description = $2, release_at = $3, is_active = $4, updated_at = NOW()
+         WHERE id = $5
+         RETURNING *`,
+        [title, description || null, releaseAt ? new Date(releaseAt) : new Date(), Boolean(isActive), formId]
+      );
+      if (formResult.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Form not found' });
+      }
+
+      await client.query('DELETE FROM form_questions WHERE form_id = $1', [formId]);
+
+      const insertedQuestions = [];
+      for (const q of normalizedQuestions) {
+        const qRes = await client.query(
+          `INSERT INTO form_questions (form_id, label, type, required, options, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING *`,
+          [formId, q.label, q.type, q.required, JSON.stringify(q.options), q.sortOrder]
+        );
+        insertedQuestions.push(qRes.rows[0]);
+      }
+
+      await client.query('COMMIT');
+      res.json({ form: formResult.rows[0], questions: insertedQuestions });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('❌ Update form error:', err);
+    res.status(500).json({ error: err.message || 'Server error' });
+  }
+});
+
+app.get('/api/admin/forms', ensureAdmin, async (req, res) => {
+  try {
+    const formsResult = await pool.query(
+      'SELECT * FROM forms ORDER BY release_at DESC, id DESC'
+    );
+    const forms = formsResult.rows;
+    if (forms.length === 0) return res.json({ forms: [] });
+
+    const formIds = forms.map((f) => f.id);
+    const qsResult = await pool.query(
+      'SELECT * FROM form_questions WHERE form_id = ANY($1) ORDER BY sort_order, id',
+      [formIds]
+    );
+    const grouped = {};
+    qsResult.rows.forEach((q) => {
+      grouped[q.form_id] = grouped[q.form_id] || [];
+      grouped[q.form_id].push(q);
+    });
+
+    const withQuestions = forms.map((f) => ({
+      ...f,
+      questions: grouped[f.id] || []
+    }));
+    res.json({ forms: withQuestions });
+  } catch (err) {
+    console.error('❌ List forms error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/forms/:id', ensureAdmin, async (req, res) => {
+  const formId = parseInt(req.params.id, 10);
+  if (isNaN(formId)) return res.status(400).json({ error: 'Invalid form id' });
+  try {
+    const formResult = await pool.query('SELECT * FROM forms WHERE id = $1', [formId]);
+    if (formResult.rowCount === 0) return res.status(404).json({ error: 'Form not found' });
+    const qsResult = await pool.query(
+      'SELECT * FROM form_questions WHERE form_id = $1 ORDER BY sort_order, id',
+      [formId]
+    );
+    res.json({ form: { ...formResult.rows[0], questions: qsResult.rows } });
+  } catch (err) {
+    console.error('❌ Get form error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- Admin: DB explorer (public schema) ---
+app.get('/api/admin/db/tables', ensureAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`
+    );
+    res.json({ tables: result.rows.map((r) => r.tablename) });
+  } catch (err) {
+    console.error('❌ List tables error:', err.message);
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/db/table/:name', ensureAdmin, async (req, res) => {
+  const table = req.params.name;
+  if (!/^[a-zA-Z0-9_]+$/.test(table)) {
+    return res.status(400).json({ error: 'Invalid table name' });
+  }
+  try {
+    const tablesResult = await pool.query(
+      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = $1`,
+      [table]
+    );
+    if (tablesResult.rowCount === 0) {
+      return res.status(404).json({ error: 'Table not found' });
+    }
+
+    const columnsResult = await pool.query(
+      `SELECT column_name FROM information_schema.columns 
+       WHERE table_schema = 'public' AND table_name = $1 
+       ORDER BY ordinal_position`,
+      [table]
+    );
+    const columns = columnsResult.rows.map((r) => r.column_name);
+
+    const rowsResult = await pool.query(`SELECT * FROM ${table} ORDER BY 1 DESC LIMIT 200`);
+    res.json({ columns, rows: rowsResult.rows });
+  } catch (err) {
+    console.error(`❌ Table fetch error for table "${table}":`, err.message);
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- Participant: available forms + responses ---
+app.get('/api/forms/available', ensureLoggedIn, async (req, res) => {
+  if (req.session.user.role !== 'participant') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const formsResult = await pool.query(
+      `SELECT * FROM forms 
+       WHERE is_active = TRUE AND release_at <= NOW()
+       ORDER BY release_at DESC, id DESC`
+    );
+    const forms = formsResult.rows;
+    if (forms.length === 0) return res.json({ forms: [] });
+    const formIds = forms.map((f) => f.id);
+    const qsResult = await pool.query(
+      'SELECT * FROM form_questions WHERE form_id = ANY($1) ORDER BY sort_order, id',
+      [formIds]
+    );
+    const grouped = {};
+    qsResult.rows.forEach((q) => {
+      const options = Array.isArray(q.options) ? q.options : q.options ? q.options : [];
+      grouped[q.form_id] = grouped[q.form_id] || [];
+      grouped[q.form_id].push({ ...q, options });
+    });
+
+    const withQuestions = forms.map((f) => ({
+      ...f,
+      questions: grouped[f.id] || []
+    }));
+    res.json({ forms: withQuestions });
+  } catch (err) {
+    console.error('❌ Available forms error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/forms/:id/response', ensureLoggedIn, async (req, res) => {
+  if (req.session.user.role !== 'participant') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const formId = parseInt(req.params.id, 10);
+  if (isNaN(formId)) return res.status(400).json({ error: 'Invalid form id' });
+  try {
+    const responseResult = await pool.query(
+      'SELECT * FROM form_responses WHERE form_id = $1 AND participant_id = $2',
+      [formId, req.session.user.id]
+    );
+    if (responseResult.rowCount === 0) return res.json({ response: null });
+    const response = responseResult.rows[0];
+    const answersResult = await pool.query(
+      'SELECT question_id, answer_text, answer_json FROM form_answers WHERE response_id = $1',
+      [response.id]
+    );
+    const answers = {};
+    answersResult.rows.forEach((a) => {
+      answers[a.question_id] = a.answer_json !== null ? a.answer_json : a.answer_text;
+    });
+    res.json({ response: { id: response.id, answers } });
+  } catch (err) {
+    console.error('❌ Get response error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/forms/:id/responses', ensureLoggedIn, async (req, res) => {
+  if (req.session.user.role !== 'participant') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const formId = parseInt(req.params.id, 10);
+  if (isNaN(formId)) return res.status(400).json({ error: 'Invalid form id' });
+
+  try {
+    const formResult = await pool.query(
+      `SELECT * FROM forms WHERE id = $1 AND is_active = TRUE AND release_at <= NOW()`,
+      [formId]
+    );
+    if (formResult.rowCount === 0) return res.status(404).json({ error: 'Form not available' });
+
+    const questionsResult = await pool.query(
+      'SELECT * FROM form_questions WHERE form_id = $1 ORDER BY sort_order, id',
+      [formId]
+    );
+    const questions = questionsResult.rows;
+    const answersInput = req.body.answers || {};
+    const processedAnswers = validateAnswers(questions, answersInput);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      let responseId;
+      const existing = await client.query(
+        'SELECT id FROM form_responses WHERE form_id = $1 AND participant_id = $2',
+        [formId, req.session.user.id]
+      );
+      if (existing.rowCount === 0) {
+        const insert = await client.query(
+          `INSERT INTO form_responses (form_id, participant_id, participant_code)
+           VALUES ($1, $2, $3)
+           RETURNING id`,
+          [formId, req.session.user.id, req.session.user.code || null]
+        );
+        responseId = insert.rows[0].id;
+      } else {
+        responseId = existing.rows[0].id;
+        await client.query(
+          'UPDATE form_responses SET updated_at = NOW(), participant_code = $2 WHERE id = $1',
+          [responseId, req.session.user.code || null]
+        );
+        await client.query('DELETE FROM form_answers WHERE response_id = $1', [responseId]);
+      }
+
+      for (const q of questions) {
+        const prepared = processedAnswers[q.id] || { answer_text: null, answer_json: null };
+        let jsonVal = null;
+        if (prepared.answer_json !== null && prepared.answer_json !== undefined) {
+          try {
+            jsonVal = JSON.stringify(prepared.answer_json);
+          } catch (e) {
+            console.error('❌ Failed to stringify answer_json for question', q.id, e);
+            jsonVal = null;
+          }
+        }
+        await client.query(
+          `INSERT INTO form_answers (response_id, question_id, participant_id, participant_code, answer_text, answer_json)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [responseId, q.id, req.session.user.id, req.session.user.code || null, prepared.answer_text, jsonVal]
+        );
+      }
+
+      await client.query('COMMIT');
+      res.json({ ok: true, responseId });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('❌ Submit response error:', err);
+    res.status(500).json({ error: err.message || 'Server error' });
+  }
 });
 
 // Register participant
@@ -407,25 +855,28 @@ process.on('uncaughtException', (error) => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('👋 SIGTERM signal received: closing HTTP server');
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`👋 ${signal} signal received: closing HTTP server`);
   server.close(() => {
     console.log('💤 HTTP server closed');
-    pool.end(() => {
-      console.log('💤 Database pool closed');
+    io.close(() => {
+      console.log('💤 Socket.IO server closed');
     });
   });
-});
+  try {
+    await pool.end();
+    console.log('💤 Database pool closed');
+  } catch (err) {
+    console.error('⚠️ Error closing DB pool:', err);
+  }
+  setTimeout(() => process.exit(0), 300).unref();
+}
 
-process.on('SIGINT', () => {
-  console.log('👋 SIGINT signal received: closing HTTP server');
-  server.close(() => {
-    console.log('💤 HTTP server closed');
-    pool.end(() => {
-      console.log('💤 Database pool closed');
-    });
-  });
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 initDb()
   .then(() => {

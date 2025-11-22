@@ -8,13 +8,30 @@
 </head>
 
 <body>
-    <h1>Participant Area</h1>
-    <button id="logout-btn">Logout</button>
+    <header class="participant-header">
+        <div>
+            <h1>Participant Area</h1>
+            <p id="socket-status">Connecting...</p>
+        </div>
+        <div class="header-actions">
+            <button id="ping-btn">Send ping</button>
+            <button id="logout-btn">Logout</button>
+        </div>
+    </header>
 
-    <h2>Socket.IO Test</h2>
-    <p id="socket-status">Connecting...</p>
-    <button id="ping-btn">Send ping</button>
-    <p id="pong-result"></p>
+    <div class="participant-layout">
+        <aside class="participant-sidebar">
+            <h2>Actions</h2>
+            <ul id="forms-sidebar" class="sidebar-list"></ul>
+            <div id="forms-message" class="message"></div>
+        </aside>
+
+        <main class="participant-main">
+            <div id="form-stage">
+                <p>Select an action from the sidebar.</p>
+            </div>
+        </main>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="participant.js"></script>

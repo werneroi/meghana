@@ -1,0 +1,2 @@
+should the word cloud be inside the particpent and what information do you want from it?
+how to structre the paricpent area? by dates? modules?

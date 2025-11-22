@@ -2,6 +2,7 @@ const logoutBtn = document.getElementById('logout-btn');
 const sidebarItems = document.querySelectorAll('#admin-sidebar .sidebar-item');
 const databaseView = document.getElementById('database-view');
 const formsView = document.getElementById('forms-view');
+const bodymapsView = document.getElementById('bodymaps-view');
 
 // Database elements
 const tablesListEl = document.getElementById('tables-list');
@@ -22,7 +23,23 @@ const formBuilderMessage = document.getElementById('form-builder-message');
 const newFormBtn = document.getElementById('new-form-btn');
 const formBuilderTitle = document.getElementById('form-builder-title');
 
+// Body map admin elements
+const bmParticipantSelect = document.getElementById('bm-participant-select');
+const bmVersionSelect = document.getElementById('bm-version-select');
+const bmLoadBtn = document.getElementById('bm-load-btn');
+const bmMessage = document.getElementById('bm-message');
+const bmCanvas = document.getElementById('bm-canvas');
+const bmLayers = document.getElementById('bm-layers');
+const loadAllBodymapsBtn = document.getElementById('load-all-bodymaps');
+
 let editingFormId = null;
+let bmStage = null;
+let bmBgLayer = null;
+let bmDrawLayer = null;
+let bmBgImageObj = null;
+let bmOverlays = [];
+const BM_STAGE_W = 450; // 50% smaller than previous
+const BM_STAGE_H = 550;
 
 logoutBtn.addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
@@ -36,10 +53,14 @@ function setView(view) {
   });
   databaseView.classList.toggle('hidden', view !== 'database');
   formsView.classList.toggle('hidden', view !== 'forms');
+  bodymapsView.classList.toggle('hidden', view !== 'bodymaps');
   if (view === 'database') {
     loadTables();
-  } else {
+  } else if (view === 'forms') {
     loadForms();
+  } else if (view === 'bodymaps') {
+    loadBmParticipants();
+    ensureBmStage();
   }
 }
 
@@ -137,6 +158,14 @@ function formatValue(v) {
   if (v instanceof Date) return v.toLocaleString();
   if (typeof v === 'object') return JSON.stringify(v);
   return v;
+}
+
+function formatDate(ts) {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return ts;
+  }
 }
 
 // --- Form builder helpers ---
@@ -319,3 +348,237 @@ newFormBtn?.addEventListener('click', () => clearBuilder(true));
 
 clearBuilder(true);
 setView('database');
+
+// --- Body map admin viewer ---
+function ensureBmStage() {
+  if (bmStage) return;
+  bmStage = new Konva.Stage({
+    container: bmCanvas,
+    width: BM_STAGE_W,
+    height: BM_STAGE_H,
+  });
+  bmBgLayer = new Konva.Layer({ listening: false });
+  bmDrawLayer = new Konva.Layer();
+  bmStage.add(bmBgLayer);
+  bmStage.add(bmDrawLayer);
+  bmDrawLayer.getCanvas()._canvas.style.opacity = '0.6';
+  loadBodyImage();
+}
+
+function loadBodyImage() {
+  const imgObj = new Image();
+  imgObj.src = 'body.jpg';
+  imgObj.crossOrigin = 'Anonymous';
+  imgObj.onload = () => {
+    bmBgImageObj = imgObj;
+    bmBgLayer.destroyChildren();
+    const kImage = new Konva.Image({ image: imgObj });
+    bmBgLayer.add(kImage);
+    fitImageToStage(kImage, imgObj);
+    bmBgLayer.batchDraw();
+  };
+}
+
+function resizeBmStage() {
+  // Stage is fixed size; no-op to prevent desync on resize
+  return;
+}
+
+function fitImageToStage(kImage, imgObj) {
+  if (!imgObj) return;
+  const stageW = bmStage.width();
+  const stageH = bmStage.height();
+  const scale = Math.min(stageW / imgObj.width, stageH / imgObj.height);
+  const w = imgObj.width * scale;
+  const h = imgObj.height * scale;
+  kImage.width(w);
+  kImage.height(h);
+  kImage.x((stageW - w) / 2);
+  kImage.y((stageH - h) / 2);
+}
+
+async function loadBmParticipants() {
+  bmParticipantSelect.innerHTML = '<option value="">Loading...</option>';
+  bmVersionSelect.innerHTML = '<option value="">Select version</option>';
+  bmMessage.textContent = '';
+  try {
+    const res = await fetch('/api/admin/bodymaps/participants');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load participants');
+    const participants = data.participants || [];
+    bmParticipantSelect.innerHTML = '<option value="">Select participant</option>';
+    participants.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.code || p.email || p.id} (${p.maps_count} maps)`;
+      bmParticipantSelect.appendChild(opt);
+    });
+  } catch (err) {
+    console.error(err);
+    bmParticipantSelect.innerHTML = '<option value="">Error loading</option>';
+  }
+}
+
+async function loadBmVersions(participantId) {
+  bmVersionSelect.innerHTML = '<option value="">Loading...</option>';
+  try {
+    const res = await fetch(`/api/admin/bodymaps/${participantId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load versions');
+    const versions = data.versions || [];
+    bmVersionSelect.innerHTML = '<option value="">Select version</option>';
+    versions.forEach((v) => {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = formatDate(v.created_at);
+      bmVersionSelect.appendChild(opt);
+    });
+  } catch (err) {
+    console.error(err);
+    bmVersionSelect.innerHTML = '<option value="">Error loading</option>';
+  }
+}
+
+async function loadSingleBodyMap(versionId, label) {
+  if (!versionId) return;
+  bmMessage.textContent = 'Loading...';
+  try {
+    const res = await fetch(`/api/admin/bodymap/version/${versionId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load map');
+    renderSingleMap(data.map.data);
+    bmMessage.textContent = label || 'Loaded';
+  } catch (err) {
+    console.error(err);
+    bmMessage.textContent = err.message;
+    bmMessage.classList.add('error');
+  }
+}
+
+async function loadAllBodyMaps() {
+  bmMessage.textContent = 'Loading all...';
+  bmLayers.innerHTML = '';
+  bmOverlays = [];
+  bmDrawLayer.destroyChildren();
+  try {
+    const res = await fetch('/api/admin/bodymaps/all');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load maps');
+    const maps = data.maps || [];
+    maps.forEach((map) => {
+      const layer = new Konva.Layer();
+      try {
+        addLayerFromSaved(map.data, layer);
+      } catch (err) {
+        console.error('Failed to load map id', map.id, err);
+      }
+      bmStage.add(layer);
+      bmOverlays.push({ layer, id: map.id, label: `${map.participant_code || map.email || map.participant_id} - ${formatDate(map.created_at)}` });
+    });
+    renderLayerControls();
+    bmMessage.textContent = 'All maps loaded';
+  } catch (err) {
+    console.error(err);
+    bmMessage.textContent = err.message;
+    bmMessage.classList.add('error');
+  }
+}
+
+function renderSingleMap(data) {
+  bmDrawLayer.destroyChildren();
+  bmDrawLayer.scale({ x: 1, y: 1 });
+  bmDrawLayer.position({ x: 0, y: 0 });
+  try {
+    addLayerFromSaved(data, bmDrawLayer);
+    bmDrawLayer.batchDraw();
+  } catch (err) {
+    console.error('Failed to render map', err);
+  }
+}
+
+function addLayerFromSaved(saved, targetLayer) {
+  const layerJson = saved?.layerJson;
+  const layerData = saved?.layer || saved;
+  const originalStage = saved?.stage;
+  targetLayer.scale({ x: 1, y: 1 });
+  targetLayer.position({ x: 0, y: 0 });
+  targetLayer.destroyChildren();
+  if (!layerJson && !layerData) return;
+  const tempLayer = layerJson
+    ? Konva.Node.create(layerJson)
+    : Konva.Node.create(JSON.stringify(layerData));
+  const children = tempLayer.getChildren();
+  [...children].forEach((child) => {
+    child.listening(false);
+    child.moveTo(targetLayer);
+  });
+
+  if (originalStage && originalStage.width && originalStage.height) {
+    const scaleX = bmStage.width() / originalStage.width;
+    const scaleY = bmStage.height() / originalStage.height;
+    const scale = Math.min(scaleX, scaleY);
+    targetLayer.scale({ x: scale, y: scale });
+
+    // center based on scaled size
+    const newW = originalStage.width * scale;
+    const newH = originalStage.height * scale;
+    targetLayer.position({
+      x: (bmStage.width() - newW) / 2,
+      y: (bmStage.height() - newH) / 2
+    });
+  }
+  targetLayer.batchDraw();
+}
+
+function renderLayerControls() {
+  bmLayers.innerHTML = '';
+  if (bmOverlays.length === 0) {
+    bmLayers.textContent = 'No layers loaded.';
+    return;
+  }
+  bmOverlays.forEach((ov) => {
+    const row = document.createElement('div');
+    row.className = 'bm-layer-row';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = true;
+    checkbox.addEventListener('change', () => {
+      ov.layer.visible(checkbox.checked);
+      ov.layer.draw();
+    });
+    const label = document.createElement('span');
+    label.textContent = ov.label;
+    row.appendChild(checkbox);
+    row.appendChild(label);
+    bmLayers.appendChild(row);
+  });
+}
+
+bmParticipantSelect?.addEventListener('change', (e) => {
+  const pid = e.target.value;
+  if (!pid) {
+    bmVersionSelect.innerHTML = '<option value="">Select version</option>';
+    return;
+  }
+  loadBmVersions(pid);
+});
+
+bmLoadBtn?.addEventListener('click', () => {
+  const versionId = bmVersionSelect.value;
+  if (!versionId) {
+    bmMessage.textContent = 'Select a version to load';
+    bmMessage.classList.add('error');
+    return;
+  }
+  bmMessage.classList.remove('error');
+  bmOverlays = [];
+  bmLayers.innerHTML = '';
+  loadSingleBodyMap(versionId);
+});
+
+loadAllBodymapsBtn?.addEventListener('click', () => {
+  bmOverlays = [];
+  bmLayers.innerHTML = '';
+  bmDrawLayer.destroyChildren();
+  loadAllBodyMaps();
+});

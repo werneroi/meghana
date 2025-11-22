@@ -5,6 +5,8 @@
     <meta charset="UTF-8" />
     <title>Admin - Participants</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/konva@9.3.3/konva.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 
 <body>
@@ -23,6 +25,7 @@
             <ul id="admin-sidebar" class="sidebar-list">
                 <li class="sidebar-item active" data-view="database">Database</li>
                 <li class="sidebar-item" data-view="forms">Forms</li>
+                <li class="sidebar-item" data-view="bodymaps">Body Map</li>
             </ul>
         </aside>
 
@@ -72,6 +75,31 @@
                         <h3>Existing forms</h3>
                         <ul id="forms-list"></ul>
                     </div>
+                </div>
+            </div>
+
+            <div id="bodymaps-view" class="admin-view hidden">
+                <div class="forms-header">
+                    <h2>Body Maps</h2>
+                    <button id="load-all-bodymaps" type="button">Load all overlays</button>
+                </div>
+                <div class="bodymap-admin-controls">
+                    <label>
+                        Participant
+                        <select id="bm-participant-select"></select>
+                    </label>
+                    <label>
+                        Version
+                        <select id="bm-version-select"></select>
+                    </label>
+                    <button id="bm-load-btn" type="button">Load</button>
+                    <span id="bm-message" class="message"></span>
+                </div>
+                <div class="bodymap-admin-layout">
+                    <div id="bm-canvas" class="bodymap-canvas">
+                        <div class="bodymap-grid"></div>
+                    </div>
+                    <div id="bm-layers" class="bm-layers"></div>
                 </div>
             </div>
         </main>

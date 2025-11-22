@@ -56,8 +56,8 @@ const pool = new Pool({
 });
 
 // --- Middlewares ---
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // app.use(
 //   session({
@@ -239,6 +239,27 @@ async function initDb() {
     await pool.query(
       `ALTER TABLE form_answers ADD COLUMN IF NOT EXISTS participant_code TEXT`
     );
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS body_maps (
+        id SERIAL PRIMARY KEY,
+        participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+        participant_code TEXT,
+        data JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await pool.query(
+      `ALTER TABLE body_maps ADD COLUMN IF NOT EXISTS participant_code TEXT`
+    );
+    await pool.query(
+      `ALTER TABLE body_maps ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`
+    );
+    await pool.query(
+      `ALTER TABLE body_maps DROP CONSTRAINT IF EXISTS body_maps_participant_id_key`
+    );
+    console.log('✅ Body maps table ready');
     
     // Check if session table exists
     const sessionCheck = await pool.query(`
@@ -509,19 +530,99 @@ app.get('/api/admin/db/table/:name', ensureAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Table not found' });
     }
 
-    const columnsResult = await pool.query(
-      `SELECT column_name FROM information_schema.columns 
-       WHERE table_schema = 'public' AND table_name = $1 
-       ORDER BY ordinal_position`,
-      [table]
-    );
-    const columns = columnsResult.rows.map((r) => r.column_name);
-
-    const rowsResult = await pool.query(`SELECT * FROM ${table} ORDER BY 1 DESC LIMIT 200`);
-    res.json({ columns, rows: rowsResult.rows });
+    let columns = [];
+    let rows = [];
+    if (table === 'body_maps') {
+      const rowsResult = await pool.query(
+        `SELECT id, participant_id, participant_code, created_at, updated_at, data 
+         FROM body_maps 
+         ORDER BY created_at DESC 
+         LIMIT 200`
+      );
+      columns = ['id', 'participant_id', 'participant_code', 'created_at', 'updated_at', 'data'];
+      rows = rowsResult.rows;
+    } else {
+      const columnsResult = await pool.query(
+        `SELECT column_name FROM information_schema.columns 
+         WHERE table_schema = 'public' AND table_name = $1 
+         ORDER BY ordinal_position`,
+        [table]
+      );
+      columns = columnsResult.rows.map((r) => r.column_name);
+      const rowsResult = await pool.query(`SELECT * FROM ${table} ORDER BY 1 DESC LIMIT 200`);
+      rows = rowsResult.rows;
+    }
+    res.json({ columns, rows });
   } catch (err) {
     console.error(`❌ Table fetch error for table "${table}":`, err.message);
     console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- Admin: Body map viewer ---
+app.get('/api/admin/bodymaps/participants', ensureAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.id, p.code, p.email, COUNT(bm.id) AS maps_count
+       FROM participants p
+       LEFT JOIN body_maps bm ON bm.participant_id = p.id
+       GROUP BY p.id, p.code, p.email
+       HAVING COUNT(bm.id) > 0
+       ORDER BY p.id`
+    );
+    res.json({ participants: result.rows });
+  } catch (err) {
+    console.error('❌ Admin list body map participants error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/bodymaps/all', ensureAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT bm.id, bm.data, bm.participant_id, bm.participant_code, bm.created_at, p.email
+       FROM body_maps bm
+       LEFT JOIN participants p ON p.id = bm.participant_id
+       ORDER BY bm.created_at DESC`
+    );
+    res.json({ maps: result.rows });
+  } catch (err) {
+    console.error('❌ Admin fetch all body maps error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/bodymaps/:participantId', ensureAdmin, async (req, res) => {
+  const pid = parseInt(req.params.participantId, 10);
+  if (isNaN(pid)) return res.status(400).json({ error: 'Invalid participant id' });
+  try {
+    const result = await pool.query(
+      `SELECT id, created_at FROM body_maps 
+       WHERE participant_id = $1
+       ORDER BY created_at DESC`,
+      [pid]
+    );
+    res.json({ versions: result.rows });
+  } catch (err) {
+    console.error('❌ Admin list body map versions error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/bodymap/version/:id', ensureAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const result = await pool.query(
+      `SELECT data, participant_id, participant_code, created_at 
+       FROM body_maps WHERE id = $1`,
+      [id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ map: result.rows[0] });
+  } catch (err) {
+    console.error('❌ Admin get body map version error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -666,6 +767,66 @@ app.post('/api/forms/:id/responses', ensureLoggedIn, async (req, res) => {
   } catch (err) {
     console.error('❌ Submit response error:', err);
     res.status(500).json({ error: err.message || 'Server error' });
+  }
+});
+
+// --- Participant: body map save/load ---
+app.get('/api/bodymap', ensureLoggedIn, async (req, res) => {
+  if (req.session.user.role !== 'participant') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const result = await pool.query(
+      'SELECT id, data, created_at FROM body_maps WHERE participant_id = $1 ORDER BY created_at DESC',
+      [req.session.user.id]
+    );
+    if (result.rowCount === 0) return res.json({ latest: null, versions: [] });
+    const versions = result.rows.map((r) => ({
+      id: r.id,
+      created_at: r.created_at
+    }));
+    res.json({ latest: result.rows[0].data, versions });
+  } catch (err) {
+    console.error('❌ Get body map error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/bodymap', ensureLoggedIn, async (req, res) => {
+  if (req.session.user.role !== 'participant') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const data = req.body?.data ?? null;
+    const result = await pool.query(
+      `INSERT INTO body_maps (participant_id, participant_code, data, created_at, updated_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       RETURNING id, created_at`,
+      [req.session.user.id, req.session.user.code || null, data]
+    );
+    res.json({ ok: true, id: result.rows[0].id, created_at: result.rows[0].created_at });
+  } catch (err) {
+    console.error('❌ Save body map error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/bodymap/:id', ensureLoggedIn, async (req, res) => {
+  if (req.session.user.role !== 'participant') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const result = await pool.query(
+      'SELECT data FROM body_maps WHERE id = $1 AND participant_id = $2',
+      [id, req.session.user.id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ data: result.rows[0].data });
+  } catch (err) {
+    console.error('❌ Get body map by id error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
